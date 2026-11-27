@@ -103,10 +103,19 @@ fn run(profile_dir: PathBuf) -> anyhow::Result<String> {
         .with_focused(false)
         .build(&event_loop)?;
 
-    // Centered on the main screen. Physical pixels throughout: monitor position/size
+    // Centered on the screen it will live on: the first non-primary monitor when there
+    // is one, so a challenge that ends up needing an interaction doesn't land in the
+    // middle of the screen the user is working on. A window on a side screen is already
+    // out of the way, so show() only floats it above everything when it sits on the
+    // primary (or only) screen. Physical pixels throughout: monitor position/size
     // and the window size on that monitor are all physical, with the window's logical
     // size scaled by that monitor's scale factor.
-    if let Some(monitor) = window.primary_monitor() {
+    let primary = window.primary_monitor();
+    let side = primary
+        .as_ref()
+        .and_then(|primary| window.available_monitors().find(|monitor| *monitor != *primary));
+    let float_on_top = side.is_none();
+    if let Some(monitor) = side.or(primary) {
         let size: tao::dpi::PhysicalSize<u32> = WINDOW_SIZE.to_physical(monitor.scale_factor());
         // Center the frame, not just the content: set_outer_position pins the frame's
         // top-left, so sizing from the content alone leaves the title bar pushing the
@@ -181,7 +190,7 @@ fn run(profile_dir: PathBuf) -> anyhow::Result<String> {
                         result = Err(anyhow::anyhow!("challenge timed out"));
                         *flow = ControlFlow::Exit;
                     }
-                    Some("turnstile-interactive") => show(&window),
+                    Some("turnstile-interactive") => show(&window, float_on_top),
                     Some("loaded") => {
                         loaded.get_or_insert_with(Instant::now);
                     }
@@ -198,7 +207,7 @@ fn run(profile_dir: PathBuf) -> anyhow::Result<String> {
                     result = Err(anyhow::anyhow!("timed out waiting for verification"));
                     *flow = ControlFlow::Exit;
                 } else if loaded.is_some_and(|t| t.elapsed() > SHOW_AFTER) {
-                    show(&window);
+                    show(&window, float_on_top);
                 }
             }
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => *flow = ControlFlow::Exit,
@@ -213,12 +222,15 @@ fn run(profile_dir: PathBuf) -> anyhow::Result<String> {
 /// around a song change while the user is typing in another app, so it must be visible
 /// and floating but must not take the keyboard. Showing alone would on Windows (and with
 /// some X11 window managers), so it's shown unfocusable, then made focusable again so a
-/// click on it works as usual.
-fn show(window: &tao::window::Window) {
+/// click on it works as usual. On the primary (or only) screen it floats above
+/// everything; on a side screen it's out of the way and doesn't float.
+fn show(window: &tao::window::Window, float_on_top: bool) {
     if !window.is_visible() {
         window.set_focusable(false);
         window.set_visible(true);
-        window.set_always_on_top(true);
+        if float_on_top {
+            window.set_always_on_top(true);
+        }
         window.set_focusable(true);
     }
 }
